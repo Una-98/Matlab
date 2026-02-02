@@ -1,0 +1,7 @@
+# MATLAB autosave & figures
+*.asv
+*.fig
+
+# Images
+*.png
+**Magnetization/

@@ -1,4 +1,4 @@
-function [M, Ovals] = TEBD2_rho(M,H,O,Nkeep,taus)
+function [M, Ovals] = TEBD2_rho(M,H,O,Nkeep,taus,dt)
 
 % < Description >
 %
@@ -30,11 +30,13 @@ function [M, Ovals] = TEBD2_rho(M,H,O,Nkeep,taus)
 % tobj = tic2;
 % [~,I] = getLocalSpace('Spin',1/2);
 N = numel(M);
+
 Nstep = numel(taus);
 ldim = 2; % local space dimension
 Skeep = 1e-8;
 tTEBD = 0.0;        % total time for time evolution
 tObs  = 0.0;        % total time for observable calculation
+Id=[1 0;0 1];
 
 if ~ismatrix(H)
     error('ERR: H should be rank-2.');
@@ -53,34 +55,32 @@ disptime(['TEBD ground state search : Nkeep = ',sprintf('%i',Nkeep), ...
 % energy expectation value at each step
 % Eiter = zeros(Nstep,2,2);
 Ovals = zeros(Nstep,N);
+TrLeft=cell(1,N);
+TrRight=cell(1,N);
 % diagonalize the Hamiltonian to exponentiate
 [VH,DH] = eig((H+H')/2);
 DH = diag(DH);
+expH = VH*diag(exp(-1i*dt/2*DH))*VH';
+% reshape matrix -> rank-6 tensor
 
+expH = reshape(expH,ldim*ones(1,6));
+
+expHconj=conj(expH);
+expH3 = VH*diag(exp(-1i*dt*DH))*VH';
+expH3 = reshape(expH3,ldim*ones(1,6));
+expH3conj=conj(expH3);
+
+  
 for it1 = (1:Nstep)
-    % exponentiate the matrix representation of Hamiltonian
-    expH = VH*diag(exp(-1i*taus(it1)/2*DH))*VH';
-    % reshape matrix -> rank-6 tensor
-    % expHconj=expH';
-    expH = reshape(expH,ldim*ones(1,6));
-    % expHconj=reshape(expHconj,ldim*ones(1,6));
-    expHconj=conj(expH);
-    % t0 = tic2;   % start TEBD timing
+  
      t0_dt = datetime('now');  
-   
-    for it2 = (1:3:(N-2))
+
+     for it2 = (1:3:(N-2))
         M = TEBD_3siteUpdate(M,expH,it2,Nkeep,Skeep);
     end
     for it2 = (2:3:(N-2))
         M = TEBD_3siteUpdate(M,expH,it2,Nkeep,Skeep);
     end
-    expH3 = VH*diag(exp(-1i*taus(it1)*DH))*VH';
-    % expH3conj=expH3';
-
-    % reshape matrix -> rank-6 tensor
-    expH3 = reshape(expH3,ldim*ones(1,6));
-    % expH3conj=reshape(expH3conj,ldim*ones(1,6));
-    expH3conj=conj(expH3);
 
     for it2 = (3:3:(N-2))
         M = TEBD_3siteUpdate(M,expH3,it2,Nkeep,Skeep);
@@ -99,8 +99,6 @@ for it1 = (1:Nstep)
         M = TEBD_3siteUpdateConj(M,expHconj,it2,Nkeep,Skeep);
     end
 
-    % expH3conj=conj(expH3);
-
     for it2 = (3:3:(N-2))
         M = TEBD_3siteUpdateConj(M,expH3conj,it2,Nkeep,Skeep);
     end
@@ -110,28 +108,61 @@ for it1 = (1:Nstep)
     for it2 = (1:3:(N-2))
         M = TEBD_3siteUpdateConj(M,expHconj,it2,Nkeep,Skeep);
     end
-     dtTEBD = seconds(datetime('now') - t0_dt);
+    dtTEBD = seconds(datetime('now') - t0_dt);
     % tTEBD = tTEBD + double(toc2(t0));
-      tTEBD = tTEBD + double(dtTEBD);
-     t1 = tic;   % start observable timing
+    tTEBD = tTEBD + double(dtTEBD);
+    t1 = tic;   % start observable timing
+
     Tr = 1;
 
+    % getIdentity(Tr,4)
     for itN = 1:N
         Tr = contract(Tr,2,2,M{itN},4,1);
-        Tr = contract(Tr,4,[4 3],getIdentity(Tr,4),2,[1 2]);
+        Tr = contract(Tr,4,[4 3],Id,2,[1 2]);
+        TrLeft{itN}=Tr;
     end
 
-    A0=1;
-    for itN = (1:N)
-        A0 = contract(A0,2,2,M{itN},4,1);
-        O1=contract(A0,4,[4 3],O,2,[1 2]);
-        for it2=itN+1:N
-            O1=contract(O1,2,2,M{it2},4,1);
-            O1=contract(O1,4,[4 3],getIdentity(O1,4),2,[1 2]);
-        end
-        Ovals(it1,itN)=trace(O1)/Tr;
-        A0 = contract(A0,4,[4 3],getIdentity(A0,4),2,[1 2]);
+    Tr = 1;
+
+    for itN = N:-1:1
+        Tr = contract(Tr,2,2,M{itN},4,2);
+        Tr = contract(Tr,4,[4 3],Id,2,[1 2]);
+        TrRight{itN}=Tr;
     end
+    
+    for itN = 1:N
+        if itN==1
+            Oval=contract(M{itN},4,[4 3],O,2,[1 2]);
+            Ovals(it1,itN)=trace(contract(Oval,2,2,TrRight{itN+1},2,2));
+        elseif itN==N
+            Oval=contract(TrLeft{itN-1},2,2,M{itN},4,1);
+            Ovals(it1,itN)=trace(contract(Oval,4,[4 3],O,2,[1 2]));
+            
+        else
+            Oval=contract(TrLeft{itN-1},2,2,M{itN},4,1);
+            
+            Oval=contract(Oval,4,[4 3],O,2,[1 2]);
+            Ovals(it1,itN)=trace(contract(Oval,2,2,TrRight{itN+1},2,2));
+        end
+    end
+    % Tr = 1;
+    % 
+    % for itN = 1:N
+    %     Tr = contract(Tr,2,2,M{itN},4,1);
+    %     Tr = contract(Tr,4,[4 3],getIdentity(Tr,4),2,[1 2]);
+    % end
+    % 
+    % A0=1;
+    % for itN = (1:N)
+    %     A0 = contract(A0,2,2,M{itN},4,1);
+    %     O1=contract(A0,4,[4 3],O,2,[1 2]);
+    %     for it2=itN+1:N
+    %         O1=contract(O1,2,2,M{it2},4,1);
+    %         O1=contract(O1,4,[4 3],getIdentity(O1,4),2,[1 2]);
+    %     end
+    %     Ovals(it1,itN)=trace(O1)/Tr;
+    %     A0 = contract(A0,4,[4 3],getIdentity(A0,4),2,[1 2]);
+    % end
     % M{N}=M{N}/Tr;
     % for itN = (1:N)
     %     Tr = contract(Tr,2,2,M{itN},4,1);
@@ -180,11 +211,11 @@ eHT = contract(T,8,[3 4 5],expH,6,[4 5 6]);
         
 % SVD; truncate singular values smaller than Skeep (= 1e-8 by
 % default)
-[M{it2},S,V] = svdTr(eHT,8,[1 3 6],Nkeep,Skeep);
+[M{it2},S,V,dw] = svdTr(eHT,8,[1 3 6],Nkeep,Skeep);
 S=diag(S);
 M{it2} = permute(M{it2},[1 4 3 2]);
 MM=contract(S,2,2,V,6,1);
-[M{it2+1},S,V] = svdTr(MM,6,[1 3 5],Nkeep,Skeep);
+[M{it2+1},S,V,dw] = svdTr(MM,6,[1 3 5],Nkeep,Skeep);
 S=diag(S);
 M{it2+1} = permute(M{it2+1},[1 4 3 2]);
 M{it2+2}=contract(S,2,2,V,4,1,[1 2 4 3]); 
@@ -205,11 +236,11 @@ eHT = contract(T,8,[6 7 8],expH,6,[1 2 3]);
         
 % SVD; truncate singular values smaller than Skeep (= 1e-8 by
 % default)
-[M{it2},S,V] = svdTr(eHT,8,[1 3 6],Nkeep,Skeep);
+[M{it2},S,V,dw] = svdTr(eHT,8,[1 3 6],Nkeep,Skeep);
 S=diag(S);
 M{it2} = permute(M{it2},[1 4 2 3]);
 MM=contract(S,2,2,V,6,1);
-[M{it2+1},S,V] = svdTr(MM,6,[1 3 5],Nkeep,Skeep);
+[M{it2+1},S,V,dw] = svdTr(MM,6,[1 3 5],Nkeep,Skeep);
 S=diag(S);
 M{it2+1} = permute(M{it2+1},[1 4 2 3]);
 M{it2+2}=contract(S,2,2,V,4,1); 

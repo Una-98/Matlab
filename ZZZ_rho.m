@@ -3,7 +3,7 @@
 [S,I] = getLocalSpace('Spin',1/2);
 Aprev = 1;
 N=3;
-
+delta=1;
 
 for itN = (1:N)
     Anow = getIdentity(Aprev,2,I,2,[1 3 2]);
@@ -31,11 +31,11 @@ for itN = (1:N)
     Aprev = Anow;
 end
 
-H=Hpm+Hmp+Hzz;
+H=Hpm+Hmp+delta*Hzz;
 
 % iTEBD parameters
 % Nkeep = [];
-Nkeep = 80;
+Nkeep = [];
 Sz = S(:,:,2);
 
 % tau_ini = 1; % initial imaginary time step size
@@ -49,7 +49,7 @@ taus = dt * ones(1, round(tmax/dt));
 t = cumsum(taus);
 Nstep=numel(taus);
 
-mu=0.25;
+mu=1;
 L=8;
 
 M = cell(1,L);
@@ -64,7 +64,20 @@ for itN = (1:L)
     end
 end
 
-[M, Ovals] = TEBD2_rho(M,H,Sz,Nkeep,taus);
+[M, Ovals, dw_sum] = TEBD2_rho_par(M,H,Sz,Nkeep,taus,dt);
+
+% Create filename that embeds all simulation parameters
+finalSaveName = sprintf('results_L%d_Nkeep%d_delta%.4g_dt%.4g_tmax%.4g_mu%.4g.mat', ...
+    L, Nkeep, delta, dt, tmax, mu);
+
+fprintf('Saving final results to: %s\n', finalSaveName);
+
+try
+    save(finalSaveName, 'M', 'Ovals', '-v7.3');
+    fprintf('Final results saved successfully.\n');
+catch ME
+    warning('Failed to save final results: %s', ME.message);
+end
 
 imagesc([1 L],[t(1) t(end)],real(Ovals));
 colorbar;
